@@ -1,2 +1,5 @@
+/.index
+/.tmp_index_*
 imap-archive
 target
+/conf_paths

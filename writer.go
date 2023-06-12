@@ -17,6 +17,9 @@ func WriteMessage(headers mail.Header, rb *bufio.Reader, w io.Writer) (n int, e 
 			}
 		}
 	}
+	if rb == nil {
+		return
+	}
 	w.Write([]byte{'\n'})
 	n++
 	for {
@@ -43,6 +46,7 @@ func WriteMessage(headers mail.Header, rb *bufio.Reader, w io.Writer) (n int, e 
 		} else {
 			return n, fmt.Errorf("error writing message")
 		}
+
 	}
 	return n, nil
 }
@@ -79,4 +83,5 @@ var header_list = []string{
 	"Content-Type",
 	"Content-Disposition",
 	"Content-Transfer-Encoding",
+	"Hash",
 }

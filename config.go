@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"io"
-	"os"
 
 	"github.com/emersion/go-sasl"
 )
@@ -13,7 +12,7 @@ import (
 // folder_list (map[local_name]remote_name) is the list of folders for which to sync; default values are "inbox", "sent", and "archive".
 // directory is the root directory containing the maildir
 // mem represents the local representation of the mailbox
-func LoadConfig(r io.Reader) (addr string, a sasl.Client, directory string, e error) {
+func LoadConfig(r io.Reader) (addr string, a sasl.Client, folder_list []string, e error) {
 	userinfo := make(map[string]string)
 
 	// load config from os.Stdin
@@ -21,13 +20,22 @@ func LoadConfig(r io.Reader) (addr string, a sasl.Client, directory string, e er
 	if e = dec.Decode(&userinfo); e != nil {
 		return
 	}
-	directory = userinfo["directory"]
-	os.MkdirAll(directory, os.ModePerm)
+	// directory = userinfo["directory"]
+	// os.MkdirAll(directory, os.ModePerm)
 
 	addr = userinfo["imap_server"]
 	switch userinfo["type"] {
 	case "plain":
 		a = sasl.NewPlainClient("", userinfo["user"], userinfo["password"])
+		folder_list = []string{"INBOX", "sent", "archive"}
+	case "gmail":
+		config, token := Gmail_Generate_Token(userinfo["clientid"], userinfo["clientsecret"], userinfo["refreshtoken"])
+		a = XOAuth2(userinfo["user"], config, token)
+		folder_list = []string{"INBOX", "[Gmail]/Sent Mail"}
+	case "outlook":
+		config, token := Outlook_Generate_Token(userinfo["clientid"], userinfo["refreshtoken"])
+		a = XOAuth2(userinfo["user"], config, token)
+		folder_list = []string{"INBOX", "Sent Items", "Archive"}
 	}
 	return
 }
