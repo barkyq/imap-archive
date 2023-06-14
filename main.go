@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/mail"
 	"os"
 	"os/exec"
@@ -24,6 +25,7 @@ const num_batons = 4
 
 var indexdir = flag.String("index", "mail/.index", "index file directory")
 var targetdir = flag.String("t", "mail/target", "target directory")
+var lastmodfile = flag.String("lastmod", "mail/.lastmod", "lastmod file")
 var portable = flag.Bool("p", false, "portable (not relative HOME)")
 
 func main() {
@@ -35,6 +37,7 @@ func main() {
 		} else {
 			*targetdir = filepath.Join(s, *targetdir)
 			*indexdir = filepath.Join(s, *indexdir)
+			*lastmodfile = filepath.Join(s, *lastmodfile)
 		}
 	}
 	if e := os.MkdirAll(*indexdir, os.ModePerm); e != nil {
@@ -55,10 +58,36 @@ func main() {
 		}
 		return cp
 	}()
-
-	// same unread works for all folders
+	var rev, arev string
+	if r, a, e := Revision(*lastmodfile); e != nil {
+		rev = ".."
+		arev = ".."
+	} else {
+		rev = r
+		arev = a
+	}
+	// same unread, deleted works for all folders
 	// do not need to regenerate and sort each time
-	unread, err := NotmuchUnread()
+	// unread is flipped so need to check which are unread from ..lastmod
+	unread, err := NotmuchTag("unread", arev)
+	if err != nil {
+		panic(err)
+	}
+
+	// check which are deleted from lastmod..
+	deleted, err := NotmuchTag("deleted", rev)
+	if err != nil {
+		panic(err)
+	}
+
+	// check which are replied from lastmod..
+	replied, err := NotmuchTag("replied", rev)
+	if err != nil {
+		panic(err)
+	}
+
+	// check which are replied from lastmod..
+	forwarded, err := NotmuchTag("forwarded", rev)
 	if err != nil {
 		panic(err)
 	}
@@ -67,12 +96,17 @@ func main() {
 	// write valid paths which will contain messages to path_buffer
 	// one on each line
 	path_buffer := bytes.NewBuffer(nil)
+	maybe_delete_buffer := bytes.NewBuffer(nil)
+
+	// last in first out
+	defer SaveLastModFile(*lastmodfile)
 	defer UpdateNotmuch(path_buffer)
+	defer MaybeDeleteHandler(*targetdir, *indexdir, maybe_delete_buffer, path_buffer)
 
 	config_chan := make(chan io.ReadCloser, len(conf_paths))
 	for _, cp := range conf_paths {
 		if f, e := os.Open(cp); e != nil {
-			fmt.Fprintf(os.Stderr, "invalid config path: %s\n", cp)
+			fmt.Fprintf(os.Stderr, "ignoring: %s\n", cp)
 			continue
 		} else if !strings.HasSuffix(f.Name(), ".gpg") {
 			config_chan <- f
@@ -146,124 +180,43 @@ func main() {
 					// TODO: try to get rid of this waitgroup.
 					var wg sync.WaitGroup
 
-					// first things first... read old index file
-					// send results on indexbyte_chan
-					indexbyte_chan := make(chan [][digest_length + 5]byte, 1)
-
-					go func() {
-						var indexbytes [][digest_length + 5]byte
+					// read old index file
+					indexbytes := func(indexfile string) (indexbytes [][digest_length + 5]byte) {
 						var rb *bufio.Reader
 						if f, e := os.Open(indexfile); e != nil {
-							indexbyte_chan <- nil
-							return
+							return nil
 						} else if i, e := f.Stat(); e != nil {
 							panic(e)
 						} else {
 							defer f.Close()
 							rb = bufio.NewReaderSize(f, int(i.Size()))
-							indexbytes = make([][25]byte, int(i.Size())/(digest_length+4+1))
+							indexbytes = make([][digest_length + 5]byte, int(i.Size())/(digest_length+4+1))
 						}
 						for k := 0; k < len(indexbytes); k++ {
 							rb.Read(indexbytes[k][:])
 						}
-						indexbyte_chan <- indexbytes
-					}()
+						return indexbytes
+					}(indexfile)
 
-					// local -> remote flag update channel
-					RL_flag_update_chan := make(chan uint32)
+					// update remote \Seen flags
+					unread_local_to_remote_update_chan := make(chan uint32)
+					go LocalToRemoteFlag(client_chan, unread_local_to_remote_update_chan, "\\Seen", nil)
+					Filter(unread, indexbytes, true, 0x01, unread_local_to_remote_update_chan)
 
-					// update remote flags
-					go func() {
-						c := <-client_chan
-						uids_seen := new(imap.SeqSet)
-						for x := range RL_flag_update_chan {
-							uids_seen.AddNum(x)
-						}
-						if uids_seen.Empty() {
-							client_chan <- c
-							return
-						}
-						ch := make(chan *imap.Message)
-						go func() {
-							ids_seen := new(imap.SeqSet)
-							for m := range ch {
-								ids_seen.AddNum(m.SeqNum)
-							}
-							flags := []interface{}{imap.SeenFlag}
-							if e := c.Store(ids_seen, imap.FormatFlagsOp(imap.SetFlags, false), flags, nil); e != nil {
-								panic(e)
-							} else {
-								client_chan <- c
-							}
-						}()
-						if e := c.UidFetch(uids_seen, []imap.FetchItem{imap.FetchUid}, ch); e != nil {
-							panic(e)
-						}
-					}()
+					// update remote \Answered flags
+					replied_local_to_remote_update_chan := make(chan uint32)
+					go LocalToRemoteFlag(client_chan, replied_local_to_remote_update_chan, "\\Answered", nil)
+					Filter(replied, indexbytes, false, 0x02, replied_local_to_remote_update_chan)
 
-					// blocking
-					// updating flags
-					func() {
-						indexbytes := <-indexbyte_chan
-						defer func() {
-							close(RL_flag_update_chan)
-							indexbyte_chan <- indexbytes
-						}()
+					// update remote \Deleted flags
+					deleted_local_to_remote_update_chan := make(chan uint32)
+					go LocalToRemoteFlag(client_chan, deleted_local_to_remote_update_chan, "\\Deleted", nil)
+					Filter(deleted, indexbytes, false, 0x04, deleted_local_to_remote_update_chan)
 
-						if len(unread) == 0 {
-							// everything is read, so put \Seen flag to everything
-							for _, ibs := range indexbytes {
-								uid := uint32(ibs[0]) + uint32(ibs[1])*256 + uint32(ibs[2])*65536 + uint32(ibs[3])*16777216
-								RL_flag_update_chan <- uid
-							}
-							return
-						}
-
-						uch, ich := make(chan []byte, num_batons), make(chan []byte, num_batons)
-						for i := 0; i < num_batons; i++ {
-							uch <- make([]byte, 4)
-							ich <- make([]byte, digest_length-1)
-						}
-						for _, ibs := range indexbytes {
-							if ibs[digest_length+4]%2 == 0x01 {
-								// already has SEEN flag
-								continue
-							}
-							u := <-uch
-							copy(u, ibs[:4])
-							i := <-ich
-							copy(i, ibs[5:digest_length+4])
-							go func(uids []byte, ibs []byte) {
-								var terminal bool
-								defer func() {
-									uch <- uids
-									ich <- ibs
-								}()
-								if sort.Search(len(unread), func(i int) bool {
-									for k, b := range unread[i] {
-										switch {
-										case ibs[k] > b:
-											return false
-										case ibs[k] == b:
-											continue
-										case ibs[k] < b:
-											return true
-										}
-									}
-									terminal = true
-									return true
-								}); !terminal {
-									// not found, means it is unread -> read
-									uid := uint32(uids[0]) + uint32(uids[1])*256 + uint32(uids[2])*65536 + uint32(uids[3])*16777216
-									RL_flag_update_chan <- uid
-								}
-							}(u, i)
-						}
-						for i := 0; i < num_batons; i++ {
-							<-uch
-							<-ich
-						}
-					}()
+					// update remote $Forwarded flags
+					forwarded_local_to_remote_update_chan := make(chan uint32)
+					go LocalToRemoteFlag(client_chan, forwarded_local_to_remote_update_chan, "$Forwarded", nil)
+					Filter(forwarded, indexbytes, false, 0x08, forwarded_local_to_remote_update_chan)
 
 					// TODO: refactor? these channels will only have one write/read
 					fetch_seq_chan := make(chan *imap.SeqSet)
@@ -276,12 +229,28 @@ func main() {
 					// remote -> local flag updating
 					LR_flag_update_chan := make(chan *FlagTicket)
 
+					// TODO clean up flag handling
 					go func() {
 						for fl := range LR_flag_update_chan {
 							first := fmt.Sprintf("%02x", fl.digest[0])
 							rest := fmt.Sprintf("%02x", fl.digest[1:])
-							if fl.flags%2 == 1 {
-								fmt.Fprintf(path_buffer, filepath.Join(*targetdir, first, rest))
+							var tags string
+
+							if (fl.flags)%0x02 == 0x01 {
+								tags += "-unread "
+							}
+							if (fl.flags/0x02)%0x02 == 0x01 {
+								tags += "+replied "
+							}
+							if (fl.flags/0x04)%0x02 == 0x01 {
+								tags += "+deleted "
+							}
+							if (fl.flags/0x08)%0x02 == 0x01 {
+								tags += "+forwarded "
+							}
+
+							if tags != "" {
+								fmt.Fprintf(path_buffer, "%s%s", tags, filepath.Join(*targetdir, first, rest))
 								path_buffer.Write([]byte{'\n'})
 							}
 						}
@@ -303,17 +272,17 @@ func main() {
 							panic(e)
 						}
 						wb := bufio.NewWriter(tmp_index)
-						var indexbytes [digest_length + 5]byte
+						var indexline [digest_length + 4]byte
 
 						// rp reader
 						for {
 							// keys which are still on server; flags already updated
-							if n, e := rp.Read(indexbytes[:]); e == io.EOF {
+							if n, e := rp.Read(indexline[:]); e == io.EOF {
 								break
-							} else if e != nil || n != digest_length+5 {
-								panic(e)
+							} else if e != nil || (n != digest_length+4 && n != 1) {
+								panic(fmt.Sprintf("%s:%d", e, n))
 							} else {
-								wb.Write(indexbytes[:])
+								wb.Write(indexline[:n])
 							}
 						}
 						for ticket := range response_chan {
@@ -345,8 +314,9 @@ func main() {
 
 					go func() {
 						fetch_seq := new(imap.SeqSet)
-						indexbytes := <-indexbyte_chan
 						uids := make([]int, len(indexbytes))
+						survived := make([]bool, len(indexbytes))
+						// uids should be sorted
 						for k := 0; k < len(indexbytes); k++ {
 							uids[k] = int(indexbytes[k][0]) + int(indexbytes[k][1])*256 + int(indexbytes[k][2])*65536 + int(indexbytes[k][3])*16777216
 						}
@@ -358,6 +328,7 @@ func main() {
 							} else {
 								// was found in index file
 								// rewrite to new index file, with updated flags
+								survived[k] = true
 								old_flags := indexbytes[k][4+digest_length]
 								var new_flags byte
 								for _, fl := range message.Flags {
@@ -366,6 +337,8 @@ func main() {
 										new_flags += 0x01
 									case "\\Answered":
 										new_flags += 0x02
+									case "\\Deleted":
+										new_flags += 0x04
 									}
 								}
 								if old_flags != new_flags {
@@ -374,10 +347,17 @@ func main() {
 										digest: indexbytes[k][4 : 4+digest_length],
 									}
 								}
-								indexbytes[k][4+digest_length] = new_flags
-
 								// wp writer
-								wp.Write(indexbytes[k][:])
+								// do not rewrite indexbytes to avoid race condition
+								wp.Write(indexbytes[k][:4+digest_length])
+								wp.Write([]byte{new_flags})
+							}
+						}
+						for k, v := range survived {
+							if v == true {
+								continue
+							} else {
+								maybe_delete_buffer.Write(indexbytes[k][4 : 4+digest_length])
 							}
 						}
 						wp.Close()
@@ -429,6 +409,8 @@ func main() {
 										ticket.flags += 0x01
 									case "\\Answered":
 										ticket.flags += 0x02
+									case "\\Deleted":
+										ticket.flags += 0x04
 									}
 								}
 								ticket.uid = message.Uid
@@ -539,4 +521,81 @@ func main() {
 		}(conf)
 	}
 	mwg.Wait()
+}
+
+func MaybeDeleteHandler(targetdir string, indexdir string, maybe_delete_buffer *bytes.Buffer, path_buffer io.Writer) error {
+	if maybe_delete_buffer.Len() == 0 {
+		return nil
+	}
+	var tmp [digest_length]byte
+	indexbytes := make([][digest_length]byte, 0, 2048)
+	rb := new(bufio.Reader)
+	filepath.WalkDir(indexdir, func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() || len(d.Name()) != 10 {
+			return nil
+		}
+		if f, e := os.Open(path); e != nil {
+			return e
+		} else if _, e := f.Stat(); e != nil {
+			panic(e)
+		} else {
+			defer f.Close()
+			rb.Reset(f)
+		}
+		for {
+			rb.Discard(4)
+			if n, e := rb.Read(tmp[:]); n != digest_length || e != nil {
+				break
+			} else {
+				indexbytes = append(indexbytes, tmp)
+			}
+			rb.Discard(1)
+		}
+		return nil
+	})
+	sort.Slice(indexbytes, func(i, j int) bool {
+		for k, b := range indexbytes[i] {
+			switch {
+			case b < indexbytes[j][k]:
+				return true
+			case b == indexbytes[j][k]:
+				continue
+			case b > indexbytes[j][k]:
+				return false
+			}
+		}
+		return true
+	})
+
+	var terminal bool
+	var first_byte, rest_bytes, path string
+	for {
+		terminal = false
+		if n, e := maybe_delete_buffer.Read(tmp[:]); e != nil || n != digest_length {
+			break
+		}
+		sort.Search(len(indexbytes), func(i int) bool {
+			for k, b := range indexbytes[i] {
+				switch {
+				case tmp[k] > b:
+					return false
+				case tmp[k] == b:
+					continue
+				case tmp[k] < b:
+					return true
+				}
+			}
+			terminal = true
+			return true
+		})
+		if !terminal {
+			// not found
+			// truly deleted
+			first_byte = fmt.Sprintf("%02x", tmp[0])
+			rest_bytes = fmt.Sprintf("%02x", tmp[1:])
+			path = filepath.Join(targetdir, first_byte, rest_bytes)
+			fmt.Fprintf(path_buffer, "+deleted %s\n", path)
+		}
+	}
+	return nil
 }
