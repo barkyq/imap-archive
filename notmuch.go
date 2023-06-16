@@ -10,29 +10,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 )
 
-func Revision(file string) (revision string, antirevision string, e error) {
+func LastMod() (new_uuid string, last_mod int, e error) {
 	cmd := exec.Command("notmuch", "count", "--lastmod")
 	rp, wp := io.Pipe()
 	cmd.Stdout = wp
 	go cmd.Run()
-	new_uuid, _, e := readLastModFile(rp)
-	if e != nil {
-		return "..", "..", e
-	}
-	if f, e := os.Open(file); e != nil {
-		return "..", "..", e
-	} else if uuid, lastmod, e := readLastModFile(f); e != nil {
-		return "..", "..", nil
-	} else if uuid != new_uuid {
-		return "..", "..", nil
-	} else {
-		return fmt.Sprintf("%d..", lastmod), fmt.Sprintf("..%d", lastmod), nil
-	}
+	return readLastModFile(rp)
 }
 
 func SaveLastModFile(file string) (e error) {
@@ -64,64 +51,74 @@ func readLastModFile(r io.Reader) (uuid string, lastmod int, e error) {
 	}
 }
 
-func NotmuchTag(tag string, rev string) (has_tag [][digest_length - 1]byte, err error) {
-	query := fmt.Sprintf("tag:%s lastmod:%s", tag, rev)
-	rp, wp := io.Pipe()
-	count, e := func() (uint64, error) {
-		var b [12]byte
-		rp, wp := io.Pipe()
-		cmd := exec.Command("notmuch", "count", query)
-		cmd.Stdout = wp
-		go cmd.Run()
-		if n, e := rp.Read(b[:]); e != nil {
-			return 0, e
-		} else {
-			return strconv.ParseUint(fmt.Sprintf("%s", b[:n-1]), 10, 64)
-		}
-	}()
-	if e != nil {
-		return nil, e
+func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid string, lastmod int) ([][][digest_length - 1]byte, error) {
+	if len(buffer) < len(taglist) {
+		buffer = make([][][digest_length - 1]byte, len(taglist))
 	}
-	rb := bufio.NewReader(rp)
-	cmd := exec.Command("notmuch", "search", "--output=files", query)
-	cmd.Stdout = wp
-	go func() {
-		if e := cmd.Run(); e != nil {
-			fmt.Fprintln(os.Stderr, "notmuch search error! continuing...")
-			wp.Close()
-		} else {
-			wp.Close()
-		}
-	}()
-	has_tag = make([][digest_length - 1]byte, 0, count)
-	for {
-		if s, e := rb.ReadString('\n'); e != nil {
-			break
-		} else if b, e := hex.DecodeString(filepath.Base(s)[:38]); e != nil || len(b) != digest_length-1 {
-			panic(e)
-		} else {
-			var tmp [digest_length - 1]byte
-			copy(tmp[:], b)
-			has_tag = append(has_tag, tmp)
-		}
-	}
-	if len(has_tag) == 0 {
-		return nil, nil
-	}
-	sort.Slice(has_tag, func(i int, j int) bool {
-		for k, b := range has_tag[i] {
-			switch {
-			case b < has_tag[j][k]:
-				return true
-			case b == has_tag[j][k]:
-				continue
-			case b > has_tag[j][k]:
-				return false
+	for k, tag := range taglist {
+		query := []string{fmt.Sprintf("--uuid=%s", uuid), fmt.Sprintf("tag:%s", tag), fmt.Sprintf("lastmod:%d..", lastmod)}
+		if count, e := func() (uint64, error) {
+			var b [12]byte
+			rp, wp := io.Pipe()
+			q := make([]string, 1, 4)
+			q[0] = "count"
+			q = append(q, query...)
+			cmd := exec.Command("notmuch", q...)
+			cmd.Stdout = wp
+			go func() {
+				if e := cmd.Run(); e != nil {
+					panic(e)
+				}
+			}()
+			if n, e := rp.Read(b[:]); e != nil {
+				panic(e)
+			} else {
+				return strconv.ParseUint(fmt.Sprintf("%s", b[:n-1]), 10, 64)
 			}
+		}(); e != nil {
+			return nil, e
+		} else if count == 0 {
+			buffer[k] = buffer[k][:0]
+			continue
+		} else if cap(buffer[k]) < int(count)+8 {
+			buffer[k] = make([][digest_length - 1]byte, 0, int(count)+16)
+		} else {
+			buffer[k] = buffer[k][:0]
 		}
-		return false
-	})
-	return has_tag, nil
+		if e := func() error {
+			rp, wp := io.Pipe()
+			rb := bufio.NewReader(rp)
+			q := make([]string, 2, 5)
+			q[0] = "search"
+			q[1] = "--output=files"
+			q = append(q, query...)
+
+			cmd := exec.Command("notmuch", q...)
+			cmd.Stdout = wp
+			go func() {
+				if e := cmd.Run(); e != nil {
+					panic(e)
+				} else {
+					wp.Close()
+				}
+			}()
+			var tmp [digest_length - 1]byte
+			for {
+				if s, e := rb.ReadString('\n'); e != nil {
+					break
+				} else if b, e := hex.DecodeString(filepath.Base(s)[:2*digest_length-2]); e != nil || len(b) != digest_length-1 {
+					panic(e)
+				} else {
+					copy(tmp[:], b)
+					buffer[k] = append(buffer[k], tmp)
+				}
+			}
+			return nil
+		}(); e != nil {
+			return nil, e
+		}
+	}
+	return buffer, nil
 }
 
 func UpdateNotmuch(pathbuffer *bytes.Buffer) error {

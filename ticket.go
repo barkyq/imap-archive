@@ -103,10 +103,9 @@ func HandleArchiveTickets(targetdir string, tickets chan *ArchiveTicket) (int, e
 }
 
 type ResponseTicket struct {
-	mailbox string
-	uid     uint32
-	digest  [digest_length]byte
-	flags   byte
+	uid    uint32
+	digest [digest_length]byte
+	flags  byte
 }
 
 func (t *ResponseTicket) Stat(dir string) (fs.FileInfo, error) {
@@ -134,6 +133,35 @@ func (t *ResponseTicket) WriteTo(w io.Writer) (n int64, e error) {
 }
 
 type FlagTicket struct {
-	flags  byte
-	digest []byte
+	old_flags byte
+	new_flags byte
+	digest    []byte
+	custom    string
+}
+
+func (fl *FlagTicket) Tags() []string {
+	tags := make([]string, 0, 6)
+	if fl.custom != "" {
+		tags = append(tags, fmt.Sprintf("+%s", fl.custom))
+	}
+	if (fl.old_flags)%0x02 != (fl.new_flags)%0x02 {
+		switch (fl.new_flags) % 0x02 {
+		case 0x00:
+			tags = append(tags, "+unread")
+		case 0x01:
+			tags = append(tags, "-unread")
+		}
+	}
+
+	for k, b := range []byte{0x02, 0x04, 0x08, 0x10} {
+		if (fl.old_flags/b)%0x02 != (fl.new_flags/b)%0x02 {
+			switch (fl.new_flags / b) % 0x02 {
+			case 0x00:
+				tags = append(tags, fmt.Sprintf("-%s", taglist[k]))
+			case 0x01:
+				tags = append(tags, fmt.Sprintf("+%s", taglist[k]))
+			}
+		}
+	}
+	return tags
 }

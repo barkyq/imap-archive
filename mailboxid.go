@@ -5,10 +5,11 @@ import (
 	"fmt"
 )
 
-func GenerateMailboxID(h string, a string, salt [digest_length]byte) string {
+func GenerateMailboxID(h string, a string, salt []byte) string {
 	hw := sha1.New()
 	hw.Write([]byte(h))
 	hw.Write([]byte(a))
-	hw.Write(salt[:])
+
+	hw.Write(salt)
 	return fmt.Sprintf("%x", hw.Sum(nil)[:5])
 }

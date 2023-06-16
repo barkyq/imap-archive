@@ -4,6 +4,12 @@ import (
 	"github.com/emersion/go-imap"
 )
 
+// local
+var taglist = []string{"replied", "deleted", "forwarded", "flagged"}
+
+// remote
+var flaglist = []string{"\\Answered", "\\Deleted", "$Forwarded", "\\Flagged"}
+
 // section: canonical headers for hashing
 var canonical_header_section = &imap.BodySectionName{
 	BodyPartName: imap.BodyPartName{
