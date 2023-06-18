@@ -10,6 +10,8 @@ import (
 	"net/mail"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 var NULL_BYTES [digest_length]byte
@@ -34,6 +36,7 @@ func (a *ArchiveTicket) Release() error {
 }
 
 func (a *ArchiveTicket) Submit() {
+	a.Hash()
 	a.tickets <- a
 }
 
@@ -74,28 +77,25 @@ func HandleArchiveTickets(targetdir string, tickets chan *ArchiveTicket) (int, e
 			ticket.Release()
 			return 0, fmt.Errorf("invalid target directory structure")
 		}
-		if _, e := os.Stat(filepath.Join(targetdir, first_byte, rest_bytes)); e == nil {
-			// already exists
-			ticket.Release()
-			continue
-		} else {
-			go func(ticket *ArchiveTicket, first_byte string, rest_bytes string) {
-				defer ticket.Release()
-				if g, e := os.Create(filepath.Join(targetdir, first_byte, rest_bytes)); e != nil {
+		go func(ticket *ArchiveTicket, first_byte string, rest_bytes string) {
+			defer ticket.Release()
+			if g, e := os.CreateTemp("/tmp/", "tmp_message"); e != nil {
+				panic(e)
+			} else {
+				ticket.wb.Reset(g)
+				if n, e := WriteMessage(ticket.msg.Header, ticket.rb, ticket.wb); e != nil {
+					panic(e)
+				} else if e := ticket.wb.Flush(); e != nil {
+					panic(e)
+				} else if e := g.Close(); e != nil {
+					panic(e)
+				} else if e := os.Rename(g.Name(), filepath.Join(targetdir, first_byte, rest_bytes)); e != nil {
 					panic(e)
 				} else {
-					ticket.wb.Reset(g)
-					if n, e := WriteMessage(ticket.msg.Header, ticket.rb, ticket.wb); e != nil {
-						panic(e)
-					} else if e := ticket.wb.Flush(); e != nil {
-						panic(e)
-					} else {
-						g.Close()
-						sizes <- n
-					}
+					sizes <- n
 				}
-			}(ticket, first_byte, rest_bytes)
-		}
+			}
+		}(ticket, first_byte, rest_bytes)
 	}
 	close(sizes)
 
@@ -103,46 +103,89 @@ func HandleArchiveTickets(targetdir string, tickets chan *ArchiveTicket) (int, e
 }
 
 type ResponseTicket struct {
-	uid    uint32
-	digest [digest_length]byte
-	flags  byte
+	uid     uint32
+	digest  [digest_length]byte
+	headers mail.Header
+	flags   byte
 }
 
-func (t *ResponseTicket) Stat(dir string) (fs.FileInfo, error) {
+type IndexTicket struct {
+	seen     bool
+	uid      uint32
+	location int
+	flags    byte
+}
+
+var stat_mutex sync.Mutex
+
+func (t *ResponseTicket) Stat(dir string) (i fs.FileInfo, err error) {
 	first_byte := fmt.Sprintf("%02x", t.digest[0])
 	rest_bytes := fmt.Sprintf("%02x", t.digest[1:])
-	return os.Stat(filepath.Join(dir, first_byte, rest_bytes))
+	stat_mutex.Lock()
+	defer stat_mutex.Unlock()
+	if i, e := os.Stat(filepath.Join(dir, first_byte, rest_bytes)); e != nil {
+		if e := os.MkdirAll(filepath.Join(dir, first_byte), os.ModePerm); e != nil {
+			panic(e)
+		} else if f, e := os.Create(filepath.Join(dir, first_byte, rest_bytes)); e != nil {
+			panic(e)
+		} else if _, e := t.WriteTo(f); e != nil {
+			panic(e)
+		} else if e := f.Close(); e != nil {
+			panic(e)
+		}
+		return i, e
+	} else {
+		return i, nil
+	}
 }
 
-// 4 byte encoding of uid
-func (t *ResponseTicket) WriteTo(w io.Writer) (n int64, e error) {
-	var uidbytes [4]byte
-	for k := range uidbytes {
-		uidbytes[k] = byte(t.uid % 256)
+func (t *ResponseTicket) WriteTo(w io.Writer) (int64, error) {
+	if n, e := WriteHeaders(t.headers, w); e != nil {
+		return int64(n), e
+	} else if _, e := w.Write([]byte{'\n'}); e != nil {
+		panic(e)
+	} else {
+		return int64(n + 1), nil
+	}
+}
+
+func (t *ResponseTicket) Read(b []byte) (n int, e error) {
+	if len(b) < 5+digest_length {
+		return 0, fmt.Errorf("not enough space")
+	}
+	for k := 0; k < 4; k++ {
+		b[k] = byte(t.uid % 256)
 		t.uid = t.uid / 256
 	}
-	if _, e := w.Write(uidbytes[:]); e != nil {
-		return 4, e
-	} else if _, e := w.Write(t.digest[:]); e != nil {
-		return 4 + digest_length, e
-	} else if _, e := w.Write([]byte{t.flags}); e != nil {
-		return 5 + digest_length, e
-	} else {
-		return 5 + digest_length, nil
-	}
+	copy(b[4:digest_length+4], t.digest[:])
+	b[4+digest_length] = t.flags
+	return 25, nil
 }
 
 type FlagTicket struct {
 	old_flags byte
 	new_flags byte
 	digest    []byte
-	custom    string
+	custom    []string
+}
+
+func (fl *FlagTicket) WriteTo(w io.Writer) (n int64, e error) {
+	first := fmt.Sprintf("%02x", fl.digest[0])
+	rest := fmt.Sprintf("%02x", fl.digest[1:])
+	if tags := fl.Tags(); len(tags) != 0 {
+		if k, e := fmt.Fprintf(w, "%s %s\n", strings.Join(tags, " "), filepath.Join(*targetdir, first, rest)); e != nil {
+			return n + int64(k), e
+		} else {
+			n += int64(k)
+		}
+	}
+	return n, nil
 }
 
 func (fl *FlagTicket) Tags() []string {
 	tags := make([]string, 0, 6)
-	if fl.custom != "" {
-		tags = append(tags, fmt.Sprintf("+%s", fl.custom))
+	if len(fl.custom) != 0 {
+		tags = append(tags, fl.custom...)
 	}
 	if (fl.old_flags)%0x02 != (fl.new_flags)%0x02 {
 		switch (fl.new_flags) % 0x02 {
@@ -152,14 +195,13 @@ func (fl *FlagTicket) Tags() []string {
 			tags = append(tags, "-unread")
 		}
 	}
-
 	for k, b := range []byte{0x02, 0x04, 0x08, 0x10} {
 		if (fl.old_flags/b)%0x02 != (fl.new_flags/b)%0x02 {
 			switch (fl.new_flags / b) % 0x02 {
 			case 0x00:
-				tags = append(tags, fmt.Sprintf("-%s", taglist[k]))
+				tags = append(tags, fmt.Sprintf("-%s", taglist[k+1]))
 			case 0x01:
-				tags = append(tags, fmt.Sprintf("+%s", taglist[k]))
+				tags = append(tags, fmt.Sprintf("+%s", taglist[k+1]))
 			}
 		}
 	}

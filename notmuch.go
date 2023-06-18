@@ -52,11 +52,17 @@ func readLastModFile(r io.Reader) (uuid string, lastmod int, e error) {
 }
 
 func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid string, lastmod int) ([][][digest_length - 1]byte, error) {
+	var counter int
 	if len(buffer) < len(taglist) {
 		buffer = make([][][digest_length - 1]byte, len(taglist))
 	}
 	for k, tag := range taglist {
-		query := []string{fmt.Sprintf("--uuid=%s", uuid), fmt.Sprintf("tag:%s", tag), fmt.Sprintf("lastmod:%d..", lastmod)}
+		var query []string
+		if k == 0 {
+			query = []string{fmt.Sprintf("tag:%s", tag)}
+		} else {
+			query = []string{fmt.Sprintf("--uuid=%s", uuid), fmt.Sprintf("tag:%s", tag), fmt.Sprintf("lastmod:%d..", lastmod)}
+		}
 		if count, e := func() (uint64, error) {
 			var b [12]byte
 			rp, wp := io.Pipe()
@@ -110,6 +116,7 @@ func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid s
 					panic(e)
 				} else {
 					copy(tmp[:], b)
+					counter++
 					buffer[k] = append(buffer[k], tmp)
 				}
 			}
@@ -118,22 +125,32 @@ func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid s
 			return nil, e
 		}
 	}
-	return buffer, nil
+	if counter == 0 {
+		return nil, nil
+	} else {
+		return buffer, nil
+	}
 }
 
-func UpdateNotmuch(pathbuffer *bytes.Buffer) error {
+func UpdateNotmuch(path_buffer *bytes.Buffer) error {
+	if path_buffer.Len() == 0 {
+		return nil
+	}
 	update := exec.Command("notmuch", "new")
 	if e := update.Run(); e != nil {
 		panic(e)
 	}
+
 	cmd := exec.Command("notmuch", "tag", "--batch")
 	rp, wp := io.Pipe()
 	cmd.Stdin = rp
 
 	go func() {
 		for {
-			if line, e := pathbuffer.ReadString('\n'); e != nil {
+			if line, e := path_buffer.ReadString('\n'); e == io.EOF {
 				break
+			} else if e != nil {
+				panic(e)
 			} else {
 				arr := strings.Split(line, " ")
 				tags := arr[:len(arr)-1]
@@ -145,6 +162,7 @@ func UpdateNotmuch(pathbuffer *bytes.Buffer) error {
 					if msg, err := mail.ReadMessage(f); err == nil {
 						fmt.Fprintf(wp, "%s id:%s\n", tags_joined, strings.Trim(msg.Header.Get("Message-ID"), "<>"))
 					} else {
+						fmt.Println(f.Name())
 						panic(err)
 					}
 					f.Close()

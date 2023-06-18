@@ -63,25 +63,3 @@ func WriteHeaders(headers mail.Header, w io.Writer) (n int, e error) {
 	}
 	return n, nil
 }
-
-var canonical_header_list = []string{
-	"From",
-	"Date",
-	"Message-ID",
-}
-
-var header_list = []string{
-	"From",
-	"To",
-	"Cc",
-	"Subject",
-	"In-Reply-To",
-	"References",
-	"Date",
-	"Message-ID",
-	"MIME-Version",
-	"Content-Type",
-	"Content-Disposition",
-	"Content-Transfer-Encoding",
-	"Hash",
-}

@@ -4,11 +4,32 @@ import (
 	"github.com/emersion/go-imap"
 )
 
+var canonical_header_list = []string{
+	"From",
+	"Message-ID",
+}
+
+var header_list = []string{
+	"From",
+	"To",
+	"Cc",
+	"Subject",
+	"In-Reply-To",
+	"References",
+	"Date",
+	"Message-ID",
+	"MIME-Version",
+	"Content-Type",
+	"Content-Disposition",
+	"Content-Transfer-Encoding",
+	"Hash",
+}
+
 // local
-var taglist = []string{"replied", "deleted", "forwarded", "flagged"}
+var taglist = []string{"unread", "replied", "deleted", "forwarded", "flagged"}
 
 // remote
-var flaglist = []string{"\\Answered", "\\Deleted", "$Forwarded", "\\Flagged"}
+var flaglist = []string{"\\Seen", "\\Answered", "\\Deleted", "$Forwarded", "\\Flagged"}
 
 // section: canonical headers for hashing
 var canonical_header_section = &imap.BodySectionName{

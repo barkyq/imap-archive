@@ -1,13 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	"golang.org/x/net/context"
+	"os/signal"
+	"syscall"
 )
 
 const digest_length = 20
@@ -18,21 +21,9 @@ var targetdir = flag.String("t", "mail/target", "target directory")
 var notmuchdir = flag.String("notmuch", "mail/.notmuch/xapian", "notmuch dir")
 var lastmodfile = flag.String("lastmod", "mail/.lastmod", "lastmod file")
 var portable = flag.Bool("p", false, "portable (not relative HOME)")
-var verbose = flag.Bool("v", true, "be verbose")
 
 func main() {
 	flag.Parse()
-
-	var logger io.Writer
-	if *verbose {
-		logger = os.Stderr
-	} else if f, e := os.CreateTemp("/tmp", "imap-archive_log_"); e != nil {
-		panic(e)
-	} else {
-		fmt.Fprintf(os.Stderr, "logging to %s\n", f.Name())
-		defer f.Close()
-		logger = f
-	}
 
 	// initialize portable directories
 	if !*portable {
@@ -56,34 +47,32 @@ func main() {
 	// at the very end, update notmuch tags
 	// write valid paths which will contain messages to path_buffer
 	// one on each line
-	path_buffer := bytes.NewBuffer(nil)
-	maybe_delete_buffer := bytes.NewBuffer(nil)
 
 	sorted_index_chan := make(chan *IndexData, size)
 
 	defer func() {
-		if e := LRFlagIdle(*lastmodfile, *notmuchdir, sorted_index_chan, size); e != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 1800*time.Second)
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			for range sigs {
+				fmt.Fprintln(os.Stderr)
+				if ctx.Err() == nil {
+					cancel()
+				}
+			}
+		}()
+		if e := LRFlagIdle(ctx, *lastmodfile, *notmuchdir, sorted_index_chan, size); e != nil {
 			panic(e)
 		}
 	}()
 
-	// TODO local -> remote flag idle syncing
-	// defer LRSync()
-	defer UpdateNotmuch(path_buffer)
-
 	unsorted_index_chan := make(chan *IndexData)
-	full_index_buffer := bytes.NewBuffer(nil)
 	var index_wg sync.WaitGroup
-	defer MaybeDeleteHandler(*targetdir, full_index_buffer, maybe_delete_buffer, path_buffer)
 	index_wg.Add(1)
 	go func() {
 		defer index_wg.Done()
 		for id := range unsorted_index_chan {
-			for _, v := range id.indexbytes {
-				if n, e := full_index_buffer.Write(v[4 : digest_length+4]); e != nil || n != digest_length {
-					panic(e)
-				}
-			}
 			id.Sort(5) // sort on the 5th byte
 			sorted_index_chan <- id
 		}
@@ -94,7 +83,7 @@ func main() {
 	config_chan := make(chan *Config, len(conf_paths))
 	for _, cp := range conf_paths {
 		if c, e := HandleConfInit(cp); e != nil {
-			fmt.Fprintf(logger, e.Error())
+			fmt.Fprintf(os.Stderr, e.Error())
 		} else {
 			config_chan <- c
 		}
@@ -109,7 +98,7 @@ func main() {
 			if cc, e := conf.InitClient(); e != nil {
 				panic(e)
 			} else {
-				FetchHandler(cc, conf, logger, unsorted_index_chan, path_buffer, maybe_delete_buffer)
+				InitHandler(cc, conf, unsorted_index_chan)
 			}
 		}(conf)
 	}
