@@ -86,6 +86,16 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 				return nil
 			}
 			<-time.After(3 * time.Second)
+			// drain attempt
+			for {
+				select {
+				case <-ln:
+					fmt.Println("drain")
+					continue
+				default:
+				}
+				break
+			}
 			buffer, e := GetNotmuchTags(taglist, nil, uuid, lastmod)
 			if e != nil {
 				return e
@@ -145,16 +155,25 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 					id.indexbytes_mutex.Unlock()
 				}
 			}
-			if u, l, e := LastMod(); e != nil {
+			if e := Reindex(uuid, lastmod); e != nil {
+				return e
+			} else if u, l, e := LastMod(); e != nil {
 				return e
 			} else {
 				uuid = u
 				lastmod = l
 			}
-
-			select {
-			case <-ln:
-			case <-ctx.Done():
+			for {
+				select {
+				case <-ln:
+					if _, l, e := LastMod(); e != nil {
+						return e
+					} else if lastmod == l {
+						continue
+					}
+				case <-ctx.Done():
+				}
+				break
 			}
 		}
 	}

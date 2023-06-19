@@ -5,7 +5,6 @@ import (
 )
 
 var canonical_header_list = []string{
-	"From",
 	"Message-ID",
 }
 

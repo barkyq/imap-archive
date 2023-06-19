@@ -98,7 +98,7 @@ func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid s
 			q[0] = "search"
 			q[1] = "--output=files"
 			q = append(q, query...)
-
+			// fmt.Println(q)
 			cmd := exec.Command("notmuch", q...)
 			cmd.Stdout = wp
 			go func() {
@@ -113,7 +113,7 @@ func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid s
 				if s, e := rb.ReadString('\n'); e != nil {
 					break
 				} else if b, e := hex.DecodeString(filepath.Base(s)[:2*digest_length-2]); e != nil || len(b) != digest_length-1 {
-					panic(e)
+					continue
 				} else {
 					copy(tmp[:], b)
 					counter++
@@ -130,6 +130,13 @@ func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid s
 	} else {
 		return buffer, nil
 	}
+}
+
+func Reindex(uuid string, lastmod int) error {
+	q := []string{"--uuid", uuid, "reindex", fmt.Sprintf("lastmod:%d..", lastmod)}
+	// fmt.Println(q)
+	update := exec.Command("notmuch", q...)
+	return update.Run()
 }
 
 func UpdateNotmuch(path_buffer *bytes.Buffer) error {

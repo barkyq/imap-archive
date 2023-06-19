@@ -8,7 +8,7 @@ import (
 )
 
 func Watch(dir string) (local_notifs chan string, err error) {
-	local_notifs = make(chan string)
+	local_notifs = make(chan string, 16)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		panic(err)
