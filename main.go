@@ -56,7 +56,7 @@ func main() {
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			for range sigs {
-				fmt.Fprintln(os.Stderr)
+				fmt.Fprintln(os.Stderr, " logging out...")
 				if ctx.Err() == nil {
 					cancel()
 				}

@@ -82,7 +82,6 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 				if e := SaveLastModFile(lastmodfile); e != nil {
 					panic(e)
 				}
-				fmt.Fprintln(os.Stderr, "ending idle loop")
 				return nil
 			}
 			<-time.After(3 * time.Second)
