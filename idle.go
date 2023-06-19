@@ -72,15 +72,15 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 					// don't unlock
 					id.indexbytes_mutex.Lock()
 					if e := id.SaveIndexFile(wb); e != nil {
-						return e
+						panic(e)
 					} else {
 						if e := id.Disconnect(); e != nil {
-							return e
+							panic(e)
 						}
 					}
 				}
 				if e := SaveLastModFile(lastmodfile); e != nil {
-					return e
+					panic(e)
 				}
 				fmt.Fprintln(os.Stderr, "ending idle loop")
 				return nil
@@ -90,7 +90,6 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 			for {
 				select {
 				case <-ln:
-					fmt.Println("drain")
 					continue
 				default:
 				}
@@ -156,9 +155,9 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 				}
 			}
 			if e := Reindex(uuid, lastmod); e != nil {
-				return e
+				fmt.Fprintln(os.Stderr, "reindex error... try again later")
 			} else if u, l, e := LastMod(); e != nil {
-				return e
+				panic(e)
 			} else {
 				uuid = u
 				lastmod = l
@@ -167,7 +166,7 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 				select {
 				case <-ln:
 					if _, l, e := LastMod(); e != nil {
-						return e
+						panic(e)
 					} else if lastmod == l {
 						continue
 					}
