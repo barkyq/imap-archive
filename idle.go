@@ -152,7 +152,7 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 					id.indexbytes_mutex.Unlock()
 				}
 			}
-			if e := Reindex(uuid, lastmod); e != nil {
+			if e := Reindex(uuid, lastmod+1); e != nil {
 				fmt.Fprintln(os.Stderr, "reindex error... try again later")
 			} else if u, l, e := LastMod(); e != nil {
 				panic(e)
