@@ -14,6 +14,7 @@ import (
 )
 
 func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic chan *IndexData, size int) error {
+
 	ids := make([]*IndexData, 0, size)
 	stopchans := make(map[string]chan struct{})
 	idling := make(map[string]*bool)
@@ -45,7 +46,8 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 				for {
 					<-time.After(5 * time.Second)
 					if e := id.Idle(); e != nil {
-						panic(e)
+						fmt.Fprintln(os.Stderr, e)
+						return
 					}
 				}
 			}(id)
@@ -75,14 +77,11 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 						panic(e)
 					} else {
 						if e := id.Disconnect(); e != nil {
-							panic(e)
+							fmt.Fprintln(os.Stderr, e)
 						}
 					}
 				}
-				if e := SaveLastModFile(lastmodfile); e != nil {
-					panic(e)
-				}
-				return nil
+				return SaveLastModFile(lastmodfile)
 			}
 			<-time.After(3 * time.Second)
 			// drain attempt
