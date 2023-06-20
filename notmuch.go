@@ -59,14 +59,14 @@ func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid s
 	for k, tag := range taglist {
 		var query []string
 		if k == 0 {
-			query = []string{fmt.Sprintf("tag:%s", tag)}
+			query = []string{fmt.Sprintf("tag:%s", tag), "not", "tag:offline"}
 		} else {
-			query = []string{fmt.Sprintf("--uuid=%s", uuid), fmt.Sprintf("tag:%s", tag), fmt.Sprintf("lastmod:%d..", lastmod)}
+			query = []string{fmt.Sprintf("--uuid=%s", uuid), fmt.Sprintf("tag:%s", tag), fmt.Sprintf("lastmod:%d..", lastmod), "not", "tag:offline"}
 		}
 		if count, e := func() (uint64, error) {
 			var b [12]byte
 			rp, wp := io.Pipe()
-			q := make([]string, 1, 4)
+			q := make([]string, 1, len(query)+1)
 			q[0] = "count"
 			q = append(q, query...)
 			cmd := exec.Command("notmuch", q...)
@@ -94,7 +94,7 @@ func GetNotmuchTags(taglist []string, buffer [][][digest_length - 1]byte, uuid s
 		if e := func() error {
 			rp, wp := io.Pipe()
 			rb := bufio.NewReader(rp)
-			q := make([]string, 2, 5)
+			q := make([]string, 2, len(query)+2)
 			q[0] = "search"
 			q[1] = "--output=files"
 			q = append(q, query...)
