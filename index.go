@@ -80,7 +80,7 @@ func (id *IndexData) Idle() error {
 	c.Updates = id.updates
 	id.idling_mutex.Unlock()
 	if e := c.Idle(id.stopidle, nil); e != nil {
-		panic(e)
+		return e
 	} else {
 		c.Updates = nil
 		id.cc <- c
