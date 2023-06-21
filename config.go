@@ -1,15 +1,17 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 
 	"bufio"
 	"fmt"
-	"github.com/emersion/go-sasl"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/emersion/go-sasl"
 )
 
 type Config struct {
@@ -30,6 +32,14 @@ type UserInfo struct {
 	ClientID     string `json:"clientid"`
 	ClientSecret string `json:"clientsecret"`
 	RefreshToken string `json:"refreshtoken"`
+}
+
+func PrintAuth(addr string, a sasl.Client) (string, error) {
+	if m, ir, e := a.Start(); e != nil {
+		return "", e
+	} else {
+		return fmt.Sprintf("%s %s %s", addr, m, base64.StdEncoding.EncodeToString(ir)), nil
+	}
 }
 
 // LoadConfig loads a configuration file (json encoded) and returns the relevant information.
@@ -58,6 +68,11 @@ func LoadConfig(r io.Reader) (addr string, a sasl.Client, e error) {
 	case "outlook":
 		config, token := Outlook_Generate_Token(userinfo["clientid"], userinfo["refreshtoken"])
 		a = XOAuth2(userinfo["user"], config, token)
+	}
+	if *printauth {
+		if h, e := PrintAuth(addr, a); e == nil {
+			fmt.Fprintln(os.Stderr, h)
+		}
 	}
 	return
 }

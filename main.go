@@ -21,6 +21,7 @@ var targetdir = flag.String("t", "mail/target", "target directory")
 var notmuchdir = flag.String("notmuch", "mail/.notmuch/xapian", "notmuch dir")
 var lastmodfile = flag.String("lastmod", "mail/.lastmod", "lastmod file")
 var portable = flag.Bool("p", false, "portable (not relative HOME)")
+var printauth = flag.Bool("auth", false, "print out AUTH information")
 
 func main() {
 	flag.Parse()
