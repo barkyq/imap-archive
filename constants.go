@@ -1,12 +1,17 @@
 package main
 
 import (
+	"time"
+
 	"github.com/emersion/go-imap"
 )
 
 var canonical_header_list = []string{
 	"Message-ID",
 }
+
+var timeout = 180 * time.Second
+var countdown = 30 * time.Second
 
 var header_list = []string{
 	"From",
