@@ -70,6 +70,7 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 		for {
 			if ctx.Err() != nil {
 				wb := new(bufio.Writer)
+				fmt.Fprintln(os.Stderr, "logging out...")
 				for _, id := range ids {
 					// don't unlock
 					id.indexbytes_mutex.Lock()

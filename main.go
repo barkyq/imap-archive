@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
 	"os/signal"
 	"syscall"
+
+	"golang.org/x/net/context"
 )
 
 const digest_length = 20
@@ -52,12 +53,18 @@ func main() {
 	sorted_index_chan := make(chan *IndexData, size)
 
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 1800*time.Second)
+		go func() {
+			timer := time.After(timeout - countdown)
+			for {
+				<-timer
+				fmt.Fprintf(os.Stderr, "waiting for %s\n", countdown)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		sigs := make(chan os.Signal, 1)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			for range sigs {
-				fmt.Fprintln(os.Stderr, " logging out...")
 				if ctx.Err() == nil {
 					cancel()
 				}
