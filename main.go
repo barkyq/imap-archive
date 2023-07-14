@@ -55,13 +55,7 @@ func main() {
 
 	defer func() {
 		timeout := time.Duration(*wait * 1000 * 1000 * 1000)
-		go func() {
-			timer := time.After(timeout)
-			for {
-				fmt.Fprintf(os.Stderr, "waiting for %s\n", timeout)
-				<-timer
-			}
-		}()
+		fmt.Fprintf(os.Stderr, "waiting for %s\n", timeout)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		sigs := make(chan os.Signal, 1)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
