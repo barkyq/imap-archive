@@ -23,6 +23,7 @@ var notmuchdir = flag.String("notmuch", "mail/.notmuch/xapian", "notmuch dir")
 var lastmodfile = flag.String("lastmod", "mail/.lastmod", "lastmod file")
 var portable = flag.Bool("p", false, "portable (not relative HOME)")
 var printauth = flag.Bool("auth", false, "print out AUTH information")
+var wait = flag.Int("wait", 60, "amount of time to wait")
 
 func main() {
 	flag.Parse()
@@ -53,11 +54,12 @@ func main() {
 	sorted_index_chan := make(chan *IndexData, size)
 
 	defer func() {
+		timeout := time.Duration(*wait * 1000 * 1000 * 1000)
 		go func() {
-			timer := time.After(timeout - countdown)
+			timer := time.After(timeout)
 			for {
+				fmt.Fprintf(os.Stderr, "waiting for %s\n", timeout)
 				<-timer
-				fmt.Fprintf(os.Stderr, "waiting for %s\n", countdown)
 			}
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
