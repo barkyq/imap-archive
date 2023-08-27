@@ -226,7 +226,7 @@ func (id *IndexData) FilterCanonicalHeaders(fetch chan *imap.Message, hasher has
 			rticket.uid = msg.Uid
 			copy(rticket.digest[:], hasher.Sum(nil))
 			hasher.Reset()
-			if _, e := rticket.Stat(*targetdir); e != nil {
+			if e := rticket.Stat(*targetdir); e != nil {
 				// need to full fetch
 				full_fetch.AddNum(msg.Uid)
 				num++

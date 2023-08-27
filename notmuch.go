@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -163,17 +164,24 @@ func UpdateNotmuch(path_buffer *bytes.Buffer) error {
 				tags := arr[:len(arr)-1]
 				path := arr[len(arr)-1]
 				tags_joined := strings.Join(tags, " ")
-				if f, e := os.Open(strings.TrimSpace(path)); e != nil {
+				var red io.ReadCloser
+				if f, e := os.Open(strings.TrimSpace(path)); e == nil {
+					red = f
+				} else if g, e := os.Open(strings.TrimSpace(path) + ".gz"); e != nil {
+					g.Close()
+					f.Close()
+					continue
+				} else if r, e := gzip.NewReader(g); e != nil {
 					panic(e)
 				} else {
-					if msg, err := mail.ReadMessage(f); err == nil {
-						fmt.Fprintf(wp, "%s id:%s\n", tags_joined, strings.Trim(msg.Header.Get("Message-ID"), "<>"))
-					} else {
-						fmt.Println(f.Name())
-						panic(err)
-					}
-					f.Close()
+					red = r
 				}
+				if msg, err := mail.ReadMessage(red); err == nil {
+					fmt.Fprintf(wp, "%s id:%s\n", tags_joined, strings.Trim(msg.Header.Get("Message-ID"), "<>"))
+				} else {
+					panic(err)
+				}
+				red.Close()
 			}
 		}
 		wp.Close()

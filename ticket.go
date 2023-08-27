@@ -118,12 +118,16 @@ type IndexTicket struct {
 
 var stat_mutex sync.Mutex
 
-func (t *ResponseTicket) Stat(dir string) (i fs.FileInfo, err error) {
+func (t *ResponseTicket) Stat(dir string) (err error) {
 	first_byte := fmt.Sprintf("%02x", t.digest[0])
 	rest_bytes := fmt.Sprintf("%02x", t.digest[1:])
 	stat_mutex.Lock()
 	defer stat_mutex.Unlock()
-	if i, e := os.Stat(filepath.Join(dir, first_byte, rest_bytes)); e != nil {
+	if _, e := os.Stat(filepath.Join(dir, first_byte, rest_bytes)); e == nil {
+		return nil
+	} else if _, e := os.Stat(filepath.Join(dir, first_byte, rest_bytes) + ".gz"); e == nil {
+		return nil
+	} else {
 		if e := os.MkdirAll(filepath.Join(dir, first_byte), os.ModePerm); e != nil {
 			panic(e)
 		} else if f, e := os.Create(filepath.Join(dir, first_byte, rest_bytes)); e != nil {
@@ -133,9 +137,7 @@ func (t *ResponseTicket) Stat(dir string) (i fs.FileInfo, err error) {
 		} else if e := f.Close(); e != nil {
 			panic(e)
 		}
-		return i, e
-	} else {
-		return i, nil
+		return fmt.Errorf("did not exist")
 	}
 }
 
