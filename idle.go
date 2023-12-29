@@ -58,7 +58,12 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 	var uuid string
 	var lastmod int
 	if f, e := os.Open(lastmodfile); e != nil {
-		return e
+		if u, l, e := LastMod(); e != nil {
+			return e
+		} else {
+			uuid = u
+			lastmod = l
+		}
 	} else if uuid, lastmod, e = readLastModFile(f); e != nil {
 		return e
 	} else if e = f.Close(); e != nil {
@@ -76,16 +81,14 @@ func LRFlagIdle(ctx context.Context, lastmodfile string, notmuchdir string, sic 
 					id.indexbytes_mutex.Lock()
 					if e := id.SaveIndexFile(wb); e != nil {
 						panic(e)
-					} else {
-						if e := id.Disconnect(); e != nil {
-							fmt.Fprintln(os.Stderr, e)
-						}
+					} else if e := id.Disconnect(); e != nil {
+						fmt.Fprintln(os.Stderr, e)
 					}
 				}
 				return SaveLastModFile(lastmodfile)
 			}
 			<-time.After(3 * time.Second)
-			// drain attempt
+			// drain the ln channel
 			for {
 				select {
 				case <-ln:

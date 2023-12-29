@@ -79,7 +79,7 @@ func HandleArchiveTickets(targetdir string, tickets chan *ArchiveTicket) (int, e
 		}
 		go func(ticket *ArchiveTicket, first_byte string, rest_bytes string) {
 			defer ticket.Release()
-			if g, e := os.CreateTemp("/tmp/", "tmp_message"); e != nil {
+			if g, e := os.CreateTemp(targetdir, ".tmp_message"); e != nil {
 				panic(e)
 			} else {
 				ticket.wb.Reset(g)

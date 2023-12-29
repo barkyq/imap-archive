@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
 	"os/signal"
 	"syscall"
 
@@ -53,6 +52,8 @@ func main() {
 
 	sorted_index_chan := make(chan *IndexData, size)
 
+
+	// first in last out
 	defer func() {
 		timeout := time.Duration(*wait * 1000 * 1000 * 1000)
 		fmt.Fprintf(os.Stderr, "waiting for %s\n", timeout)
