@@ -10,37 +10,23 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 )
 
 type IndexData struct {
-	mailboxname      string
-	filename         string
-	k                int
-	addr             string
-	indexbytes       [][digest_length + 5]byte
-	indexbytes_mutex *sync.Mutex
-	addbuffer        [][5]byte // first byte is flag, rest bytes are uint32
-	cc               chan *client.Client
-	stopidle         chan struct{}
-	updates          chan client.Update
-	idling           *bool
-	idling_mutex     *sync.Mutex
+	mailboxname string
+	filename    string
+	k           int
+	addr        string
+	indexbytes  [][digest_length + 5]byte
+	addbuffer   [][5]byte // first byte is flag, rest bytes are uint32
+	cc          chan *client.Client
 }
 
 func read_uint32(x []byte) uint32 {
 	return uint32(x[0]) + uint32(x[1])*256 + uint32(x[2])*65536 + uint32(x[3])*16777216
-}
-
-func (id *IndexData) GenerateSignal(mask byte) []byte {
-	signalbytes := make([]byte, len(id.indexbytes))
-	for k, b := range id.indexbytes {
-		signalbytes[k] = (b[digest_length+4] / mask) % 0x02
-	}
-	return signalbytes
 }
 
 func (id *IndexData) GenerateIndexTickets() []*IndexTicket {
@@ -58,217 +44,24 @@ func (id *IndexData) GenerateIndexTickets() []*IndexTicket {
 	return indextickets
 }
 
-func (id *IndexData) Idle() error {
-	if id.addr == "outlook.office365.com:993" {
-		// outlook has imap idle bug
-		return nil
-	}
-	id.idling_mutex.Lock()
-	if *id.idling == true {
-		return nil
-	}
-	c := <-id.cc
-	fmt.Fprintf(os.Stderr, "idling: %s/%s\n", id.addr, id.mailboxname)
-	if _, e := c.Select(id.mailboxname, true); e != nil {
-		return e
-	} else if id.updates == nil {
-		return fmt.Errorf("need to instantiate updates chan")
-	} else if id.stopidle == nil {
-		return fmt.Errorf("need to instantiate stop idle chan")
-	}
-	*id.idling = true
-	c.Updates = id.updates
-	id.idling_mutex.Unlock()
-	if e := c.Idle(id.stopidle, nil); e != nil {
-		return e
-	} else {
-		c.Updates = nil
-		id.cc <- c
-	}
-	return nil
-}
-
-// a bit janky...
-func (id *IndexData) StopIdle() {
-	id.idling_mutex.Lock()
-	defer id.idling_mutex.Unlock()
-	if *id.idling == true {
-		id.stopidle <- struct{}{}
-		*id.idling = false
-	} else {
-		return
-	}
-}
-
-func (id *IndexData) ListenForUpdates(maybe_delete_buffer *bytes.Buffer) {
-	if id.updates == nil {
-		panic("id.updates is nil")
-	}
+func (id *IndexData) ForceUpdate(maybe_delete_buffer *bytes.Buffer, path_buffer *bytes.Buffer) {
 	hasher := sha256.New()
-	path_buffer := bytes.NewBuffer(nil)
-	for upd := range id.updates {
-		if _, ok := upd.(*client.ExpungeUpdate); ok {
-			// expunge updates
-		} else if _, ok := upd.(*client.MessageUpdate); ok {
-			// flag updates
-		} else if _, ok := upd.(*client.MailboxUpdate); ok {
-			// new message
-		} else if _, ok := upd.(*client.StatusUpdate); ok {
-			// don't sync on status updates
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "checking: %s/%s\n", id.addr, id.mailboxname)
-		id.indexbytes_mutex.Lock()
-		if fetch, e := id.CompareUIDs(path_buffer, maybe_delete_buffer); e != nil {
+	fmt.Fprintf(os.Stderr, "checking: %s/%s\n", id.addr, id.mailboxname)
+
+	if fetch, e := id.CompareUIDs(path_buffer, maybe_delete_buffer); e != nil {
+		panic(e)
+	} else if fetch != nil {
+		if full, e := id.FilterCanonicalHeaders(fetch, hasher, path_buffer); e != nil {
 			panic(e)
-		} else if fetch != nil {
-			if full, e := id.FilterCanonicalHeaders(fetch, hasher, path_buffer); e != nil {
+		} else if full != nil {
+			if e := id.HandleFullFetched(full); e != nil {
 				panic(e)
-			} else if full != nil {
-				if e := id.HandleFullFetched(full); e != nil {
-					panic(e)
-				}
 			}
 		}
-		if e := UpdateNotmuch(path_buffer); e != nil {
-			panic(e)
-		}
-		id.indexbytes_mutex.Unlock()
 	}
-}
-
-func (id *IndexData) HandleFullFetched(full chan *imap.Message) error {
-	id.StopIdle()
-	c := <-id.cc
-	defer func() {
-		id.cc <- c
-	}()
-	tickets := make(chan *ArchiveTicket)
-	batons := make(chan *ArchiveTicket, num_batons)
-	go func() {
-		if count, e := HandleArchiveTickets(*targetdir, tickets); e != nil {
-			panic(e)
-		} else {
-			fmt.Printf("written: %s/%s %0.6f MB\n", id.addr, id.mailboxname, float64(count)/1000000)
-		}
-	}()
-	for i := 0; i < num_batons; i++ {
-		a := &ArchiveTicket{
-			hasher:  sha256.New(),
-			batons:  batons,
-			tickets: tickets,
-			file:    nil,
-			msg:     new(mail.Message),
-			rb:      new(bufio.Reader),
-			wb:      new(bufio.Writer),
-		}
-		batons <- a
-	}
-	for msg := range full {
-		t := <-batons
-		if m, e := mail.ReadMessage(msg.GetBody(full_section)); e != nil {
-			return e
-		} else {
-			t.rb.Reset(m.Body)
-			t.msg = m
-			t.Submit()
-		}
-	}
-	for i := 0; i < num_batons; i++ {
-		<-batons
-	}
-	close(batons)
-	close(tickets)
-	return nil
-}
-
-func (id *IndexData) FilterCanonicalHeaders(fetch chan *imap.Message, hasher hash.Hash, path_buffer *bytes.Buffer) (chan *imap.Message, error) {
-	counter := 0
-	num := 0
-	full_fetch := new(imap.SeqSet)
-	for msg := range fetch {
-		if m, e := mail.ReadMessage(msg.GetBody(canonical_header_section)); e != nil {
-			continue
-		} else {
-			if n, e := WriteHeaders(m.Header, hasher); e != nil {
-				return nil, e
-			} else {
-				counter += n
-			}
-			rticket := new(ResponseTicket)
-			rticket.headers = m.Header
-
-			custom := make([]string, 0, 2)
-			switch id.k {
-			case 0:
-				custom = append(custom, "+inbox")
-			case 1:
-				custom = append(custom, "+sent")
-			}
-
-			for _, fl := range msg.Flags {
-				switch fl {
-				case flaglist[0]:
-					rticket.flags += 0x01
-				case flaglist[1]:
-					rticket.flags += 0x01 << 1
-				case flaglist[2]:
-					rticket.flags += 0x01 << 2
-				case flaglist[3]:
-					rticket.flags += 0x01 << 3
-				case flaglist[4]:
-					rticket.flags += 0x01 << 4
-				}
-			}
-			if (rticket.flags/0x04)%0x02 == 0x00 {
-				custom = append(custom, "-deleted")
-			}
-			rticket.uid = msg.Uid
-			copy(rticket.digest[:], hasher.Sum(nil))
-			hasher.Reset()
-			if e := rticket.Stat(*targetdir); e != nil {
-				// need to full fetch
-				full_fetch.AddNum(msg.Uid)
-				num++
-			}
-			fl := &FlagTicket{
-				old_flags: 0x00,
-				new_flags: rticket.flags,
-				digest:    rticket.digest[:],
-				custom:    custom,
-			}
-			fl.WriteTo(path_buffer)
-			var t [digest_length + 5]byte
-			rticket.Read(t[:])
-			id.indexbytes = append(id.indexbytes, t)
-		}
-	}
-	if counter > 0 {
-		fmt.Printf("hashed: %s/%s %d bytes\n", id.addr, id.mailboxname, counter)
-		if e := id.Sort(5); e != nil {
-			return nil, e
-		}
-	}
-	if full_fetch.Empty() {
-		return nil, nil
-	}
-	id.StopIdle()
-	c := <-id.cc
-	full := make(chan *imap.Message, num)
-	go func() {
-		if _, e := c.Select(id.mailboxname, false); e != nil {
-			panic(e)
-		} else if e := c.UidFetch(full_fetch, full_fetch_items, full); e != nil {
-			panic(e)
-		} else {
-			id.cc <- c
-		}
-	}()
-	return full, nil
 }
 
 func (id *IndexData) CompareUIDs(path_buffer *bytes.Buffer, maybe_delete_buffer *bytes.Buffer) (chan *imap.Message, error) {
-	id.StopIdle()
 	c := <-id.cc
 	if stat, e := c.Select(id.mailboxname, false); e != nil {
 		select {
@@ -363,54 +156,132 @@ func (id *IndexData) CompareUIDs(path_buffer *bytes.Buffer, maybe_delete_buffer 
 	return fetch, c.Fetch(uid_seq, uid_fetch_items, uid_chan)
 }
 
-func (id *IndexData) SubmitFlags(buffer [][5]byte, op imap.FlagsOp) error {
-	uids := make([]*imap.SeqSet, 5)
-	for _, x := range buffer {
-		for k := range uids {
-			if x[0]/(0x01<<k)%0x02 == 1 {
-				if uids[k] == nil {
-					uids[k] = new(imap.SeqSet)
-				}
-				uids[k].AddNum(read_uint32(x[1:5]))
+func (id *IndexData) FilterCanonicalHeaders(fetch chan *imap.Message, hasher hash.Hash, path_buffer *bytes.Buffer) (chan *imap.Message, error) {
+	counter := 0
+	num := 0
+	full_fetch := new(imap.SeqSet)
+	for msg := range fetch {
+		if m, e := mail.ReadMessage(msg.GetBody(canonical_header_section)); e != nil {
+			continue
+		} else {
+			if n, e := WriteHeaders(m.Header, hasher); e != nil {
+				return nil, e
+			} else {
+				counter += n
 			}
+			rticket := new(ResponseTicket)
+			rticket.headers = m.Header
+
+			custom := make([]string, 0, 2)
+			switch id.k {
+			case 0:
+				custom = append(custom, "+inbox")
+			case 1:
+				custom = append(custom, "+sent")
+			}
+
+			for _, fl := range msg.Flags {
+				switch fl {
+				case flaglist[0]:
+					rticket.flags += 0x01
+				case flaglist[1]:
+					rticket.flags += 0x01 << 1
+				case flaglist[2]:
+					rticket.flags += 0x01 << 2
+				case flaglist[3]:
+					rticket.flags += 0x01 << 3
+				case flaglist[4]:
+					rticket.flags += 0x01 << 4
+				}
+			}
+			if (rticket.flags/0x04)%0x02 == 0x00 {
+				custom = append(custom, "-deleted")
+			}
+			rticket.uid = msg.Uid
+			copy(rticket.digest[:], hasher.Sum(nil))
+			hasher.Reset()
+			if e := rticket.Stat(*targetdir); e != nil {
+				// need to full fetch
+				full_fetch.AddNum(msg.Uid)
+				num++
+			}
+			fl := &FlagTicket{
+				old_flags: 0x00,
+				new_flags: rticket.flags,
+				digest:    rticket.digest[:],
+				custom:    custom,
+			}
+			fl.WriteTo(path_buffer)
+			var t [digest_length + 5]byte
+			rticket.Read(t[:])
+			id.indexbytes = append(id.indexbytes, t)
 		}
 	}
-	id.StopIdle()
+	if counter > 0 {
+		fmt.Printf("hashed: %s/%s %d bytes\n", id.addr, id.mailboxname, counter)
+		if e := id.Sort(5); e != nil {
+			return nil, e
+		}
+	}
+	if full_fetch.Empty() {
+		return nil, nil
+	}
+
+	c := <-id.cc
+	full := make(chan *imap.Message, num)
+	go func() {
+		if _, e := c.Select(id.mailboxname, false); e != nil {
+			panic(e)
+		} else if e := c.UidFetch(full_fetch, full_fetch_items, full); e != nil {
+			panic(e)
+		} else {
+			id.cc <- c
+		}
+	}()
+	return full, nil
+}
+
+func (id *IndexData) HandleFullFetched(full chan *imap.Message) error {
 	c := <-id.cc
 	defer func() {
 		id.cc <- c
 	}()
-	if _, e := c.Select(id.mailboxname, false); e != nil {
-		return e
+	tickets := make(chan *ArchiveTicket)
+	batons := make(chan *ArchiveTicket, num_batons)
+	go func() {
+		if count, e := HandleArchiveTickets(*targetdir, tickets); e != nil {
+			panic(e)
+		} else {
+			fmt.Printf("written: %s/%s %0.6f MB\n", id.addr, id.mailboxname, float64(count)/1000000)
+		}
+	}()
+	for i := 0; i < num_batons; i++ {
+		a := &ArchiveTicket{
+			hasher:  sha256.New(),
+			batons:  batons,
+			tickets: tickets,
+			file:    nil,
+			msg:     new(mail.Message),
+			rb:      new(bufio.Reader),
+			wb:      new(bufio.Writer),
+		}
+		batons <- a
 	}
-	for k, u := range uids {
-		if e := func(k int, u *imap.SeqSet) error {
-			var wg sync.WaitGroup
-			defer wg.Wait()
-			if u == nil || u.Empty() {
-				return nil
-			}
-			ch := make(chan *imap.Message)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ids_seen := new(imap.SeqSet)
-				for m := range ch {
-					ids_seen.AddNum(m.SeqNum)
-				}
-				flags := []interface{}{flaglist[k]}
-				if ids_seen.Empty() {
-					return
-				}
-				if e := c.Store(ids_seen, imap.FormatFlagsOp(op, false), flags, nil); e != nil {
-					panic(e)
-				}
-			}()
-			return c.UidFetch(u, []imap.FetchItem{imap.FetchUid}, ch)
-		}(k, u); e != nil {
+	for msg := range full {
+		t := <-batons
+		if m, e := mail.ReadMessage(msg.GetBody(full_section)); e != nil {
 			return e
+		} else {
+			t.rb.Reset(m.Body)
+			t.msg = m
+			t.Submit()
 		}
 	}
+	for i := 0; i < num_batons; i++ {
+		<-batons
+	}
+	close(batons)
+	close(tickets)
 	return nil
 }
 
@@ -435,7 +306,6 @@ func (id *IndexData) SaveIndexFile(wb *bufio.Writer) error {
 }
 
 func (id *IndexData) Disconnect() error {
-	id.StopIdle()
 	c := <-id.cc
 	select {
 	case <-c.LoggedOut():

@@ -23,11 +23,6 @@ func (conf *Config) InitClient() (cc chan *client.Client, e error) {
 	if _, ir, e := a.Start(); e != nil {
 		panic(e)
 	} else {
-		// fmt.Println(addr)
-		// enc := base64.NewEncoder(base64.StdEncoding, os.Stderr)
-		// enc.Write(ir)
-		// enc.Close()
-		// fmt.Println()
 		copy(conf.salt[:], ir)
 	}
 	client_chan := make(chan *client.Client, 1)

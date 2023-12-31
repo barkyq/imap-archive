@@ -1,16 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
-	"os/signal"
-	"syscall"
-
-	"golang.org/x/net/context"
 )
 
 const digest_length = 20
@@ -18,11 +15,8 @@ const num_batons = 4
 
 var indexdir = flag.String("index", "mail/.index", "index file directory")
 var targetdir = flag.String("t", "mail/target", "target directory")
-var notmuchdir = flag.String("notmuch", "mail/.notmuch/xapian", "notmuch dir")
-var lastmodfile = flag.String("lastmod", "mail/.lastmod", "lastmod file")
 var portable = flag.Bool("p", false, "portable (not relative HOME)")
 var printauth = flag.Bool("auth", false, "print out AUTH information")
-var wait = flag.Int("wait", 60, "amount of time to wait")
 
 func main() {
 	flag.Parse()
@@ -34,8 +28,6 @@ func main() {
 		} else {
 			*targetdir = filepath.Join(s, *targetdir)
 			*indexdir = filepath.Join(s, *indexdir)
-			*notmuchdir = filepath.Join(s, *notmuchdir)
-			*lastmodfile = filepath.Join(s, *lastmodfile)
 		}
 	}
 
@@ -52,24 +44,38 @@ func main() {
 
 	sorted_index_chan := make(chan *IndexData, size)
 
-
 	// first in last out
 	defer func() {
-		timeout := time.Duration(*wait * 1000 * 1000 * 1000)
-		fmt.Fprintf(os.Stderr, "waiting for %s\n", timeout)
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		sigs := make(chan os.Signal, 1)
-		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-		go func() {
-			for range sigs {
-				if ctx.Err() == nil {
-					cancel()
-				}
+		// no idle
+		disconnect_chan := make(chan *IndexData, size)
+		maybe_delete_buffer := bytes.NewBuffer(nil)
+		path_buffer := bytes.NewBuffer(nil)
+		wb := new(bufio.Writer)
+		for id := range sorted_index_chan {
+			id.ForceUpdate(maybe_delete_buffer, path_buffer)
+			// blocks until done
+			c := <-id.cc
+
+			// save index file
+			if e := id.SaveIndexFile(wb); e != nil {
+				panic(e)
 			}
-		}()
-		if e := LRFlagIdle(ctx, *lastmodfile, *notmuchdir, sorted_index_chan, size); e != nil {
+			// puts back into chan in case someone else needs client
+			id.cc <- c
+			disconnect_chan <- id
+		}
+
+		if e := UpdateNotmuch(path_buffer); e != nil {
 			panic(e)
 		}
+
+		close(disconnect_chan)
+		for id := range disconnect_chan {
+			if e := id.Disconnect(); e != nil {
+				panic(e)
+			}
+		}
+
 	}()
 
 	unsorted_index_chan := make(chan *IndexData)
