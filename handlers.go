@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 
 	"os"
@@ -10,18 +11,24 @@ import (
 )
 
 func (conf *Config) InitClient() (cc chan *client.Client, e error) {
-	addr, a, e := LoadConfig(conf.r)
+	salt, addr, a, e := LoadConfig(conf.r)
 	if e != nil {
 		return nil, e
 	}
 	conf.r.Close()
 	conf.addr = addr
 	conf.a = a
-	conf.salt = make([]byte, digest_length)
-	if _, ir, e := a.Start(); e != nil {
+	if tmp, e := base64.URLEncoding.DecodeString(salt); e != nil {
+		return nil, e
+	} else {
+		conf.salt = tmp
+	}
+	if !*printauth {
+		// do nothing
+	} else if m, ir, e := a.Start(); e != nil {
 		panic(e)
 	} else {
-		copy(conf.salt[:], ir)
+		fmt.Fprintln(os.Stdout, conf.PrintAuth(m, ir))
 	}
 	client_chan := make(chan *client.Client, 1)
 	if c, e := client.DialTLS(addr, nil); e != nil {

@@ -34,20 +34,12 @@ type UserInfo struct {
 	RefreshToken string `json:"refreshtoken"`
 }
 
-func PrintAuth(addr string, a sasl.Client) (string, error) {
-	if m, ir, e := a.Start(); e != nil {
-		return "", e
-	} else {
-		return fmt.Sprintf("%s %s %s", addr, m, base64.StdEncoding.EncodeToString(ir)), nil
-	}
+func (c *Config) PrintAuth(m string, ir []byte) string {
+	return fmt.Sprintf("%s %s %s %s", GenerateMailboxID(c.folders[0], c.addr, c.salt), c.addr, m, base64.URLEncoding.EncodeToString(ir))
 }
 
 // LoadConfig loads a configuration file (json encoded) and returns the relevant information.
-// addr (hostname:port format) is the remote address for which to make a connection.
-// folder_list (map[local_name]remote_name) is the list of folders for which to sync; default values are "inbox", "sent", and "archive".
-// directory is the root directory containing the maildir
-// mem represents the local representation of the mailbox
-func LoadConfig(r io.Reader) (addr string, a sasl.Client, e error) {
+func LoadConfig(r io.Reader) (salt, addr string, a sasl.Client, e error) {
 	userinfo := make(map[string]string)
 
 	// load config from os.Stdin
@@ -58,6 +50,7 @@ func LoadConfig(r io.Reader) (addr string, a sasl.Client, e error) {
 	// directory = userinfo["directory"]
 	// os.MkdirAll(directory, os.ModePerm)
 
+	salt = userinfo["salt"]
 	addr = userinfo["imap_server"]
 	switch userinfo["type"] {
 	case "plain":
@@ -68,11 +61,6 @@ func LoadConfig(r io.Reader) (addr string, a sasl.Client, e error) {
 	case "outlook":
 		config, token := Outlook_Generate_Token(userinfo["clientid"], userinfo["refreshtoken"])
 		a = XOAuth2(userinfo["user"], config, token)
-	}
-	if *printauth {
-		if h, e := PrintAuth(addr, a); e == nil {
-			fmt.Fprintln(os.Stdout, h)
-		}
 	}
 	return
 }
