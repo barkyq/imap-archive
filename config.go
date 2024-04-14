@@ -71,7 +71,7 @@ func LoadConfig(r io.Reader) (addr string, a sasl.Client, e error) {
 	}
 	if *printauth {
 		if h, e := PrintAuth(addr, a); e == nil {
-			fmt.Fprintln(os.Stderr, h)
+			fmt.Fprintln(os.Stdout, h)
 		}
 	}
 	return

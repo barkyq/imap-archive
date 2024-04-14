@@ -46,7 +46,7 @@ func (id *IndexData) GenerateIndexTickets() []*IndexTicket {
 
 func (id *IndexData) ForceUpdate(path_buffer *bytes.Buffer) {
 	hasher := sha256.New()
-	fmt.Fprintf(os.Stdout, "c: %s\n", filepath.Base(id.filename))
+	fmt.Fprintf(os.Stderr, "c: %s\n", filepath.Base(id.filename))
 
 	if fetch, e := id.CompareUIDs(path_buffer); e != nil {
 		panic(e)
@@ -216,7 +216,7 @@ func (id *IndexData) FilterCanonicalHeaders(fetch chan *imap.Message, hasher has
 		}
 	}
 	if counter > 0 {
-		fmt.Fprintf(os.Stdout, "h %s: %d b\n", filepath.Base(id.filename)[:5], counter)
+		fmt.Fprintf(os.Stderr, "h %s: %d b\n", filepath.Base(id.filename)[:5], counter)
 		if e := id.Sort(5); e != nil {
 			return nil, e
 		}
@@ -250,7 +250,7 @@ func (id *IndexData) HandleFullFetched(full chan *imap.Message) error {
 		if count, e := HandleArchiveTickets(*targetdir, tickets); e != nil {
 			panic(e)
 		} else {
-			fmt.Fprintf(os.Stdout, "w %s: %0.4f MB\n", filepath.Base(id.filename)[:5], float64(count)/1000000)
+			fmt.Fprintf(os.Stderr, "w %s: %0.4f MB\n", filepath.Base(id.filename)[:5], float64(count)/1000000)
 		}
 	}()
 	for i := 0; i < num_batons; i++ {
