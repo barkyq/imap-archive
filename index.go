@@ -44,11 +44,11 @@ func (id *IndexData) GenerateIndexTickets() []*IndexTicket {
 	return indextickets
 }
 
-func (id *IndexData) ForceUpdate(maybe_delete_buffer *bytes.Buffer, path_buffer *bytes.Buffer) {
+func (id *IndexData) ForceUpdate(path_buffer *bytes.Buffer) {
 	hasher := sha256.New()
 	fmt.Fprintf(os.Stdout, "c: %s\n", filepath.Base(id.filename))
 
-	if fetch, e := id.CompareUIDs(path_buffer, maybe_delete_buffer); e != nil {
+	if fetch, e := id.CompareUIDs(path_buffer); e != nil {
 		panic(e)
 	} else if fetch != nil {
 		if full, e := id.FilterCanonicalHeaders(fetch, hasher, path_buffer); e != nil {
@@ -61,7 +61,7 @@ func (id *IndexData) ForceUpdate(maybe_delete_buffer *bytes.Buffer, path_buffer 
 	}
 }
 
-func (id *IndexData) CompareUIDs(path_buffer *bytes.Buffer, maybe_delete_buffer *bytes.Buffer) (chan *imap.Message, error) {
+func (id *IndexData) CompareUIDs(path_buffer *bytes.Buffer) (chan *imap.Message, error) {
 	c := <-id.cc
 	if stat, e := c.Select(id.mailboxname, false); e != nil {
 		select {
@@ -71,6 +71,7 @@ func (id *IndexData) CompareUIDs(path_buffer *bytes.Buffer, maybe_delete_buffer 
 			panic(e)
 		}
 	} else if stat.Messages == 0 {
+		id.indexbytes = nil
 		id.cc <- c
 		return nil, nil
 	}
@@ -132,7 +133,7 @@ func (id *IndexData) CompareUIDs(path_buffer *bytes.Buffer, maybe_delete_buffer 
 			deleted++
 			id.indexbytes[it.location][4+digest_length] = 0xff
 			path := filepath.Join(*targetdir, fmt.Sprintf("%02x", id.indexbytes[it.location][4]), fmt.Sprintf("%02x", id.indexbytes[it.location][5:digest_length+4]))
-			fmt.Fprintf(path_buffer, "+deleted %s\n", path)
+			fmt.Fprintf(path_buffer, "+offline %s\n", path)
 		}
 		if deleted > 0 {
 			if e := id.Sort(4 + digest_length); e != nil {
@@ -193,9 +194,6 @@ func (id *IndexData) FilterCanonicalHeaders(fetch chan *imap.Message, hasher has
 				case flaglist[4]:
 					rticket.flags += 0x01 << 4
 				}
-			}
-			if (rticket.flags/0x04)%0x02 == 0x00 {
-				custom = append(custom, "-deleted")
 			}
 			rticket.uid = msg.Uid
 			copy(rticket.digest[:], hasher.Sum(nil))

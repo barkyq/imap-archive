@@ -48,11 +48,10 @@ func main() {
 	defer func() {
 		// no idle
 		disconnect_chan := make(chan *IndexData, size)
-		maybe_delete_buffer := bytes.NewBuffer(nil)
 		path_buffer := bytes.NewBuffer(nil)
 		wb := new(bufio.Writer)
 		for id := range sorted_index_chan {
-			id.ForceUpdate(maybe_delete_buffer, path_buffer)
+			id.ForceUpdate(path_buffer)
 			// blocks until done
 			c := <-id.cc
 

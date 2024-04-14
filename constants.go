@@ -25,7 +25,7 @@ var header_list = []string{
 }
 
 // local
-var taglist = []string{"unread", "replied", "deleted", "forwarded", "flagged"}
+var taglist = []string{"unread", "replied", "offline", "forwarded", "flagged"}
 
 // remote
 var flaglist = []string{"\\Seen", "\\Answered", "\\Deleted", "$Forwarded", "\\Flagged"}
