@@ -45,39 +45,41 @@ func main() {
 	sorted_index_chan := make(chan *IndexData, size)
 
 	// first in last out
-	defer func() {
-		// no idle
-		disconnect_chan := make(chan *IndexData, size)
-		path_buffer := bytes.NewBuffer(nil)
-		wb := new(bufio.Writer)
-		for id := range sorted_index_chan {
-			id.ForceUpdate(path_buffer)
-			// blocks until done
-			c := <-id.cc
+	if !*printauth {
+		defer func() {
+			// no idle
+			disconnect_chan := make(chan *IndexData, size)
+			path_buffer := bytes.NewBuffer(nil)
+			wb := new(bufio.Writer)
+			for id := range sorted_index_chan {
+				id.ForceUpdate(path_buffer)
+				// blocks until done
+				c := <-id.cc
 
-			// save index file
-			if e := id.SaveIndexFile(wb); e != nil {
+				// save index file
+				if e := id.SaveIndexFile(wb); e != nil {
+					panic(e)
+				}
+				// puts back into chan in case someone else needs client
+				id.cc <- c
+				disconnect_chan <- id
+			}
+
+			if e := UpdateNotmuch(path_buffer); e != nil {
 				panic(e)
 			}
-			// puts back into chan in case someone else needs client
-			id.cc <- c
-			disconnect_chan <- id
-		}
 
-		if e := UpdateNotmuch(path_buffer); e != nil {
-			panic(e)
-		}
-
-		close(disconnect_chan)
-		for id := range disconnect_chan {
-			if e := id.Disconnect(); e != nil {
-				panic(e)
+			close(disconnect_chan)
+			for id := range disconnect_chan {
+				if e := id.Disconnect(); e != nil {
+					panic(e)
+				}
 			}
-		}
-
-	}()
+		}()
+	}
 
 	unsorted_index_chan := make(chan *IndexData)
+
 	var index_wg sync.WaitGroup
 	index_wg.Add(1)
 	go func() {
