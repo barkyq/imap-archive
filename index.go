@@ -174,10 +174,7 @@ func (id *IndexData) FilterCanonicalHeaders(fetch chan *imap.Message, hasher has
 			rticket.headers = m.Header
 
 			custom := make([]string, 0, 2)
-			switch id.k {
-			case 0:
-				custom = append(custom, "+inbox")
-			case 1:
+			if id.k == 1 {
 				custom = append(custom, "+sent")
 			}
 
