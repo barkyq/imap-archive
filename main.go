@@ -17,7 +17,7 @@ var indexdir = flag.String("index", "mail/.index", "index file directory")
 var targetdir = flag.String("t", "mail/target", "target directory")
 var portable = flag.Bool("p", false, "portable (not relative HOME)")
 var printauth = flag.Bool("auth", false, "print out AUTH information")
-var notmuch = flag.Bool("notmuch", true, "call notmuch")
+var no_notmuch = flag.Bool("no-notmuch", false, "do not call notmuch")
 
 func main() {
 	flag.Parse()
@@ -66,12 +66,12 @@ func main() {
 				disconnect_chan <- id
 			}
 
-			if *notmuch {
+			if !*no_notmuch {
 				if e := UpdateNotmuch(path_buffer); e != nil {
 					panic(e)
 				}
 			}
-			
+
 			close(disconnect_chan)
 			for id := range disconnect_chan {
 				if e := id.Disconnect(); e != nil {
