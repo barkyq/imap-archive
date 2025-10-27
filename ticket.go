@@ -7,8 +7,11 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"log"
+	"mime"
 	"net/mail"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,8 +38,31 @@ func (a *ArchiveTicket) Release() error {
 	return nil
 }
 
+func notify_send(header mail.Header) error {
+	var summary, body string
+	var decoder = new(mime.WordDecoder)
+	if al, e := header.AddressList("From"); e != nil || len(al) == 0 {
+		summary = "no sender"
+	} else {
+		summary = al[0].Address
+	}
+
+	if subject, e := decoder.DecodeHeader(header.Get("Subject")); e != nil {
+		body = "no subject"
+	} else {
+		body = subject
+	}
+
+	cmd := exec.Command("notify-send", "-t", "0", summary, body)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func (a *ArchiveTicket) Submit() {
 	a.Hash()
+	if e := notify_send(a.msg.Header); e != nil {
+		log.Print(e)
+	}
 	a.tickets <- a
 }
 
