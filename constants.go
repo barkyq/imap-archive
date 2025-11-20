@@ -8,22 +8,6 @@ var canonical_header_list = []string{
 	"Message-ID",
 }
 
-var header_list = []string{
-	"From",
-	"To",
-	"Cc",
-	"Subject",
-	"In-Reply-To",
-	"References",
-	"Date",
-	"Message-ID",
-	"MIME-Version",
-	"Content-Type",
-	"Content-Disposition",
-	"Content-Transfer-Encoding",
-	"Hash",
-}
-
 // local
 var taglist = []string{"unread", "replied", "offline", "forwarded", "flagged"}
 

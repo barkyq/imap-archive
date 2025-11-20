@@ -23,7 +23,7 @@ type ArchiveTicket struct {
 	digest  [digest_length]byte
 	file    fs.File
 	msg     *mail.Message
-	rb      *bufio.Reader
+	rb      []byte
 	wb      *bufio.Writer
 }
 
@@ -83,7 +83,7 @@ func HandleArchiveTickets(targetdir string, tickets chan *ArchiveTicket) (int, e
 				panic(e)
 			} else {
 				ticket.wb.Reset(g)
-				if n, e := WriteMessage(ticket.msg.Header, ticket.rb, ticket.wb); e != nil {
+				if n, e := ticket.wb.Write(ticket.rb); e != nil {
 					panic(e)
 				} else if e := ticket.wb.Flush(); e != nil {
 					panic(e)

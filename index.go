@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"hash"
+	"io"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -257,17 +258,19 @@ func (id *IndexData) HandleFullFetched(full chan *imap.Message) error {
 			tickets: tickets,
 			file:    nil,
 			msg:     new(mail.Message),
-			rb:      new(bufio.Reader),
+			rb:      nil,
 			wb:      new(bufio.Writer),
 		}
 		batons <- a
 	}
 	for msg := range full {
 		t := <-batons
-		if m, e := mail.ReadMessage(msg.GetBody(full_section)); e != nil {
+		if body, e := io.ReadAll(msg.GetBody(full_section)); e != nil {
+			return e
+		} else if m, e := mail.ReadMessage(bytes.NewBuffer(body)); e != nil {
 			return e
 		} else {
-			t.rb.Reset(m.Body)
+			t.rb = body
 			t.msg = m
 			t.Submit()
 		}
